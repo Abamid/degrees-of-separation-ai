@@ -1,14 +1,20 @@
+# streamlit_app.py
+
 import streamlit as st
 import csv
-import sys
 
-# ==== DATA STRUCTURES ====
-names = {}      # Maps names to a set of corresponding person_ids
-people = {}     # Maps person_ids to a dict of: name, birth, movies they've starred in
-movies = {}     # Maps movie_ids to a dict of: title, year, stars (a set of person_ids)
+# ==== Data Structures ====
+
+people = {}
+movies = {}
+names = {}
 
 # ==== Load Data ====
+
 def load_data(directory):
+    """
+    Load people, movies, and stars from CSV files into memory.
+    """
     # Load people.csv
     with open(f"{directory}/people.csv", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -18,11 +24,7 @@ def load_data(directory):
                 "birth": row["birth"],
                 "movies": set()
             }
-            name_key = row["name"].lower()
-            if name_key not in names:
-                names[name_key] = {row["id"]}
-            else:
-                names[name_key].add(row["id"])
+            names.setdefault(row["name"].lower(), set()).add(row["id"])
 
     # Load movies.csv
     with open(f"{directory}/movies.csv", encoding="utf-8") as f:
@@ -42,16 +44,18 @@ def load_data(directory):
                 people[row["person_id"]]["movies"].add(row["movie_id"])
                 movies[row["movie_id"]]["stars"].add(row["person_id"])
             except KeyError:
-                pass  # Skip if person/movie ID not found
+                pass
 
 # ==== Helper Functions ====
+
 def person_id_for_name(name):
     person_ids = list(names.get(name.lower(), set()))
-    if len(person_ids) == 0:
+    if not person_ids:
         return None
-    elif len(person_ids) > 1:
-        st.warning("Multiple people found. Using the first match.")
-    return person_ids[0]
+    elif len(person_ids) == 1:
+        return person_ids[0]
+    else:
+        return person_ids[0]  # just return the first match for simplicity
 
 def neighbors_for_person(person_id):
     movie_ids = people[person_id]["movies"]
@@ -61,7 +65,8 @@ def neighbors_for_person(person_id):
             neighbors.add((movie_id, star_id))
     return neighbors
 
-# ==== Search Algorithm ====
+# ==== Breadth-First Search ====
+
 class Node:
     def __init__(self, state, parent, action):
         self.state = state
@@ -84,68 +89,67 @@ class QueueFrontier:
     def remove(self):
         if self.empty():
             raise Exception("Frontier is empty")
-        else:
-            return self.frontier.pop(0)
+        return self.frontier.pop(0)
 
 def shortest_path(source, target):
-    frontier = QueueFrontier()
     start = Node(state=source, parent=None, action=None)
+    frontier = QueueFrontier()
     frontier.add(start)
 
     explored = set()
 
-    while True:
-        if frontier.empty():
-            return None
-
+    while not frontier.empty():
         node = frontier.remove()
-
         if node.state == target:
-            # Reconstruct path
             path = []
-            while node.parent is not None:
+            while node.parent:
                 path.append((node.action, node.state))
                 node = node.parent
-            path.reverse()
-            return path
+            return path[::-1]
 
         explored.add(node.state)
 
         for movie_id, person_id in neighbors_for_person(node.state):
-            if person_id not in explored and not frontier.contains_state(person_id):
+            if not frontier.contains_state(person_id) and person_id not in explored:
                 child = Node(state=person_id, parent=node, action=movie_id)
                 frontier.add(child)
 
-# ==== STREAMLIT APP ====
+    return None
 
-st.set_page_config(page_title="Degrees of Separation", page_icon="🎬")
+# ==== Streamlit UI ====
+
+st.set_page_config(page_title="Degrees of Separation", layout="centered")
 st.title("🎬 Degrees of Separation")
-st.write("Find how two actors are connected through shared movies using AI search (BFS).")
+st.write("Find how two actors are connected through shared movies using AI search!")
 
 # Load data
-load_data("degrees_project_colab/small")
-st.success(f"Dataset loaded: {len(people)} people, {len(movies)} movies.")
+load_data("small")
+st.success(f"✅ Dataset loaded: {len(people)} people, {len(movies)} movies")
 
 # User input
-name1 = st.text_input("Enter the first actor’s name:", "Michael Fassbender")
-name2 = st.text_input("Enter the second actor’s name:", "Jennifer Lawrence")
+name1 = st.text_input("🔍 Enter the first actor’s name:")
+name2 = st.text_input("🎯 Enter the second actor’s name:")
 
-if st.button("Find Connection"):
+if name1 and name2:
     source = person_id_for_name(name1)
     target = person_id_for_name(name2)
 
-    if source is None or target is None:
-        st.error("Actor not found in the dataset.")
+    if source is None:
+        st.error(f"❌ Actor '{name1}' not found.")
+    elif target is None:
+        st.error(f"❌ Actor '{name2}' not found.")
     else:
-        path = shortest_path(source, target)
+        with st.spinner("🔎 Searching for connection..."):
+            path = shortest_path(source, target)
+
         if path is None:
-            st.error("No connection found between the two actors.")
+            st.warning("⚠️ No connection found between the two actors.")
         else:
-            st.success(f"{len(path)} degrees of separation found!")
+            st.success(f"✅ {len(path)} degrees of separation found!")
             current = source
             for i, (movie_id, person_id) in enumerate(path):
                 movie = movies[movie_id]["title"]
                 person1 = people[current]["name"]
                 person2 = people[person_id]["name"]
-                st.write(f"{i+1}: {person1} and {person2} starred in *{movie}*")
+                st.write(f"**{i + 1}:** {person1} and {person2} starred in *{movie}*")
                 current = person_id
